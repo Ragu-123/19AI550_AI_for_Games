@@ -2,470 +2,674 @@
 ### DATE:                                                                            
 ### REGISTER NUMBER : 212222240081
 ### AIM: 
-To develop a 2D fighting game using Python and Pygame, where a player character battles AI-controlled enemies with animations, health management, scoring, and respawn mechanics. The game will feature smooth character movement, attack animations, and an engaging gameplay experience with a final score display on game over.
+The aim of the game is to provide an engaging combat experience where players use gestures and AI-driven strategies to outmaneuver and defeat opponents. It focuses on integrating intuitive controls and dynamic interactions for both single-player and multiplayer gameplay.
 ### Algorithm:
-**1.Game Setup:**
+```
+Game Initialization: Initialize the Pyxel window and define game resolution and title.
+Menu Navigation: Use arrow keys and gestures to select between Test Game, Host Game, Join Game, and Quit.
+Network Setup: Detect available network interfaces using netifaces for hosting or joining multiplayer games.
+Gesture-Based Controls: Implement gesture recognition for player actions like attacks, movement, and blocking.
+Game State Management: Use a GameState class to transition between MENU, PLAYING, and GAME_OVER.
+AI Decision-Making: Use distance-based logic for AI actions: approach, retreat, attack, or idle.
+Player Interaction: Enable keyboard and gesture inputs to control movement and initiate attacks.
+Dynamic Rendering: Continuously update and draw game components (player, AI, menu) based on the current state.
+Collision and Cooldowns: Manage attack cooldowns and detect player-AI or projectile collisions.
+```
 
-  Initialize Pygame and set up the game window.
-
-  Load background, spritesheet, and sound effects.
-
-  Define colors and fonts for health bars and score.
-
-**2. Define Fighter Class:**
-   
- Initialize position, health, and score.
- 
- Load and organize sprite animations for actions (idle, move, attack).
- 
- Implement movement, boundary checks, and a jump mechanism.
- 
- Handle attacks, health reduction on hit, and display health bars.
-  
-**3. Main Game Loop:**
-   
-  Initialize player and enemies.
-  
-Loop while player’s health > 0:
-
-  Handle player input for movement and attacks.
- 
-   Move enemies towards the player and trigger attacks if in range.
- 
-   Check for collisions, apply damage, and play sound effects.
- 
-   Respawn defeated enemies and increase player score.
-  
-**4. Display Info & Game Over:**
-
-  Display player’s score and health bars.
-  
-  If player health reaches zero, show “Game Over” and final score, then close the game.
   
 ### Program:
 ```
-import pygame
-from pygame import mixer
-from fighter import Fighter
+import pyxel
+import socket
+import threading
+import cv2
+import mediapipe as mp
+import numpy as np
+import sys
+import os
+import netifaces
+import time
+import random
 
-mixer.init()
-pygame.init()
+class GestureDetector:
+    def __init__(self):
+        self.mp_hands = mp.solutions.hands
+        self.hands = self.mp_hands.Hands(
+            static_image_mode=False,
+            max_num_hands=1,
+            min_detection_confidence=0.7
+        )
+        self.cap = cv2.VideoCapture(0)
+        self.detected_gesture = None
+        self.running = True
+        self.thread = threading.Thread(target=self._process_frames)
+        self.thread.start()
+        self.last_gesture_time = time.time()
+        self.gesture_cooldown = 0.2  # 200ms cooldown between gestures
 
-#Create game window
-SCREEN_WIDTH = 1000
-SCREEN_HEIGHT = 600
+    def _process_frames(self):
+        while self.running:
+            success, image = self.cap.read()
+            if not success:
+                continue
 
-screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-pygame.display.set_caption("Brawler")
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            results = self.hands.process(image)
 
-#Set framerate
-clock = pygame.time.Clock()
-FPS = 60
+            if results.multi_hand_landmarks:
+                hand_landmarks = results.multi_hand_landmarks[0]
+                
+                current_time = time.time()
+                if current_time - self.last_gesture_time >= self.gesture_cooldown:
+                    # Check gestures in priority order
+                    if self._is_block_gesture(hand_landmarks):
+                        self.detected_gesture = "block"
+                        self.last_gesture_time = current_time
+                    elif self._is_power_attack_gesture(hand_landmarks):
+                        self.detected_gesture = "power_attack"
+                        self.last_gesture_time = current_time
+                    elif self._is_punch_gesture(hand_landmarks):
+                        self.detected_gesture = "punch"
+                        self.last_gesture_time = current_time
+                    elif self._is_dash_gesture(hand_landmarks):
+                        self.detected_gesture = "dash"
+                        self.last_gesture_time = current_time
+                    else:
+                        self.detected_gesture = None
 
-#Define colours
-RED = (255, 0, 0)
-YELLOW = (255, 255, 0)
-WHITE = (255, 255, 255)
+            time.sleep(0.016)  # Approximately 60 FPS to match game performance
 
-#Define game variables
-intro_count = 3
-last_count_update = pygame.time.get_ticks()
-score = [0, 0] #Player scores [P1, P2]
-round_over = False
-ROUND_OVER_COOLDOWN = 2000
-
-#Define fighter variables
-HERO1_SIZE = 200.25
-HERO1_SCALE = 3.4
-HERO1_OFFSET = [87, 70]
-HERO1_DATA = [HERO1_SIZE, HERO1_SCALE, HERO1_OFFSET]
-HERO2_SIZE = 200.25
-HERO2_SCALE = 3.2
-HERO2_OFFSET = [84, 72]
-HERO2_DATA = [HERO2_SIZE, HERO2_SCALE, HERO2_OFFSET]
-
-#Load music and sounds
-pygame.mixer.music.load("assets/audio/music.mp3")
-pygame.mixer.music.set_volume(0.1)
-pygame.mixer.music.play(-1, 0.0, 5000)
-sword_fx = pygame.mixer.Sound("assets/audio/sword.mp3")
-sword_fx.set_volume(0.5)
-hit_fx = pygame.mixer.Sound("assets/audio/hit.mp3")
-hit_fx.set_volume(0.5)
-
-#Load background
-bg_image = pygame.image.load("assets/images/background/background.png").convert_alpha()
-
-#Load spritesheets
-hero1_sheet = pygame.image.load("assets/images/characters/hero1/Sprites/hero1.png").convert_alpha()
-hero2_sheet = pygame.image.load("assets/images/characters/hero2/Sprites/hero2.png").convert_alpha()
-
-#Define number of frames of each animation
-HERO1_ANIMATION_FRAMES = [8, 8, 2, 6, 6, 4, 6]
-HERO2_ANIMATION_FRAMES = [4, 8, 2, 4, 4, 3, 7]
-
-#Define font
-count_font = pygame.font.Font("assets/fonts/turok.ttf", 80)
-score_font = pygame.font.Font("assets/fonts/turok.ttf", 30)
-victory_font = pygame.font.Font("assets/fonts/turok.ttf", 70)
-
-#Function to draw text
-def draw_text(text, font, text_col, x, y):
-    img = font.render(text, True, text_col) #Convert text to image
-    screen.blit(img, (x, y))
-
-#Function to draw background
-def draw_bg():
-    #Scale original background image to game window size
-    scaled_bg = pygame.transform.scale(bg_image, (SCREEN_WIDTH, SCREEN_HEIGHT))
-    screen.blit(scaled_bg, (0, 0))
-
-#Function for drawing fighter health bars
-def draw_health_bar(health, x, y):
-    ratio = health / 100
-    pygame.draw.rect(screen, WHITE, (x - 2, y - 2, 404, 34))
-    pygame.draw.rect(screen, RED, (x, y, 400, 30))
-    pygame.draw.rect(screen, YELLOW, (x, y, 400 * ratio, 30)) #Adjust health bar based on ratio of health
-
-#Create two instances of fighters
-fighter_1 = Fighter(1, 200, 370, False, HERO1_DATA, hero1_sheet, HERO1_ANIMATION_FRAMES, sword_fx, hit_fx)
-fighter_2 = Fighter(2, 700, 370, True, HERO2_DATA, hero2_sheet, HERO2_ANIMATION_FRAMES, sword_fx, hit_fx)
-
-#Game loop
-run = True
-while run:
-
-    clock.tick(FPS)
-
-    #Draw background
-    draw_bg()
-
-    #Show player stats
-    draw_health_bar(fighter_1.health, 20, 20)
-    draw_health_bar(fighter_2.health, 580, 20)
-    draw_text("P1: " + str(score[0]) + " rounds won", score_font, RED, 20, 60)
-    draw_text("P2: " + str(score[1]) + " rounds won", score_font, RED, 580, 60)
-
-    #Update countdown
-    if intro_count <= 0:
-        #Move fighters
-        fighter_1.move(SCREEN_WIDTH, SCREEN_HEIGHT, screen, fighter_2, round_over)
-        fighter_2.move(SCREEN_WIDTH, SCREEN_HEIGHT, screen, fighter_1, round_over)
-    else:
-        #Display countdown timer
-        draw_text(str(intro_count), count_font, RED, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 4)
+    def _is_punch_gesture(self, landmarks):
+        finger_tips = [8, 12, 16, 20]  # Index, Middle, Ring, Pinky
+        finger_mids = [6, 10, 14, 18]  # Middle points of fingers
         
-        #Update countdown timer
-        if (pygame.time.get_ticks() - last_count_update) >= 1000:
-            intro_count -= 1
-            last_count_update = pygame.time.get_ticks()
-            print(intro_count)
+        bent_fingers = sum(1 for tip, mid in zip(finger_tips, finger_mids)
+                         if landmarks.landmark[tip].y > landmarks.landmark[mid].y)
+        
+        return bent_fingers >= 3
 
-    #Update fighters
-    fighter_1.update()
-    fighter_2.update()
+    def _is_block_gesture(self, landmarks):
+        # Open palm facing forward (all fingers extended)
+        finger_tips = [8, 12, 16, 20]  # Index, Middle, Ring, Pinky
+        finger_mids = [6, 10, 14, 18]  # Middle points of fingers
+        
+        extended_fingers = sum(1 for tip, mid in zip(finger_tips, finger_mids)
+                             if landmarks.landmark[tip].y < landmarks.landmark[mid].y)
+        
+        # Check if palm is vertical (y-coordinates of finger bases are similar)
+        finger_bases = [5, 9, 13, 17]
+        base_y_coords = [landmarks.landmark[i].y for i in finger_bases]
+        vertical_palm = max(base_y_coords) - min(base_y_coords) < 0.1
+        
+        return extended_fingers >= 3 and vertical_palm
 
-    #Draw fighters
-    fighter_1.draw(screen)
-    fighter_2.draw(screen)
+    def _is_power_attack_gesture(self, landmarks):
+        # Thumbs up gesture
+        thumb_tip = landmarks.landmark[4]
+        thumb_ip = landmarks.landmark[3]
+        
+        # Other fingers should be folded
+        finger_tips = [8, 12, 16, 20]
+        finger_mids = [6, 10, 14, 18]
+        
+        fingers_folded = sum(1 for tip, mid in zip(finger_tips, finger_mids)
+                           if landmarks.landmark[tip].y > landmarks.landmark[mid].y)
+        
+        thumb_up = thumb_tip.y < thumb_ip.y and fingers_folded >= 3
+        return thumb_up
 
-    #Check for player defeat
-    if round_over == False:
-        if fighter_1.alive == False:
-            score[1] += 1
-            round_over = True
-            round_over_time = pygame.time.get_ticks()
-        elif fighter_2.alive == False:
-            score[0] += 1
-            round_over = True
-            round_over_time = pygame.time.get_ticks()
-    else:
-        #Display win text
-        draw_text("Player {} Wins!".format(1 if fighter_1.alive else 2), victory_font, RED, SCREEN_WIDTH / 3.5, SCREEN_HEIGHT / 5)
-        #Additional logic for handling end of the round
-        if pygame.time.get_ticks() - round_over_time > ROUND_OVER_COOLDOWN:
-            round_over = False
-            intro_count = 3
-            #Recreate instances of fighters
-            fighter_1 = Fighter(1, 200, 370, False, HERO1_DATA, hero1_sheet, HERO1_ANIMATION_FRAMES, sword_fx, hit_fx)
-            fighter_2 = Fighter(2, 700, 370, True, HERO2_DATA, hero2_sheet, HERO2_ANIMATION_FRAMES, sword_fx, hit_fx)
+    def _is_dash_gesture(self, landmarks):
+        # Horizontal swipe gesture (check if hand is moving horizontally)
+        wrist = landmarks.landmark[0]
+        fingertips = [landmarks.landmark[tip] for tip in [8, 12, 16, 20]]
+        
+        # Check if fingers are together and extended
+        x_spread = max(tip.x for tip in fingertips) - min(tip.x for tip in fingertips)
+        y_spread = max(tip.y for tip in fingertips) - min(tip.y for tip in fingertips)
+        
+        fingers_together = x_spread < 0.1
+        fingers_extended = all(tip.y < wrist.y for tip in fingertips)
+        
+        return fingers_together and fingers_extended
 
+    def get_gesture(self):
+        gesture = self.detected_gesture
+        self.detected_gesture = None
+        return gesture
 
-    #Event handler
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            run = False
-
-
-    #Update display
-    pygame.display.update()
-
-#Exit pygame
-pygame.quit()
-
-import pygame
-
-class Fighter():
-    #Constructor
-    def __init__(self, player, x, y, flip, data, sprite_sheet, animation_frames, attack_sound, hit_sound):
-        #Player hitbox
-        self.player = player
-        self.size = data[0]
-        self.image_scale = data[1]
-        self.offset = data[2]
-        self.custom_offset = [87, 76]
-        self.hit_offset = [85, 81.5]
-        self.death_offset = [85, 83]
-        self.flip = flip
-
-        #Player animation
-        self.animation_list = self.load_images(sprite_sheet, animation_frames)
-        self.action = 0 #0:idle #1:run #2:jump #3:attack1 #4:attack2 #5:hit #6:death
-        self.frame_index = 0
-        self.image = self.animation_list[self.action][self.frame_index] #Assign first frame of fighter's current action animation 
-        self.update_time = pygame.time.get_ticks()
-        self.rect = pygame.Rect((x, y, 80, 180))
-        self.vel_y = 0
-
-        #Player status and actions
+    def cleanup(self):
         self.running = False
-        self.jump = False
-        self.attacking = False
-        self.attack_type = 0
-        self.attack_cooldown = 0
-        self.last_attack_time = 0
-        self.attack_sound = attack_sound
-        self.hit = False
-        self.hit_sound = hit_sound
+        if hasattr(self, 'thread'):
+            self.thread.join()
+        self.cap.release()
+
+class Player:
+    def __init__(self, x, y, color, is_player_one=True):
+        self.x = x
+        self.y = y - 70
+        self.vy = 0
+        self.color = color
+        self.is_jumping = False
         self.health = 100
-        self.alive = True
-    
-    def load_images(self, sprite_sheet, animation_frames):
-        #Extract images from spritesheet
-        animation_list = []
-        #y = 0
-        for y, animation in enumerate(animation_frames): #Track each frame
-            temp_img_list = []
-            #Create temp list of frames from each row of spritesheet to add to main list
-            for x in range(animation):
-                temp_img = sprite_sheet.subsurface(x * self.size, y * self.size, self.size, self.size)
-                pygame.transform.scale(temp_img, (self.size * self.image_scale, self.size * self.image_scale))
-                temp_img_list.append(pygame.transform.scale(temp_img, (self.size * self.image_scale, self.size * self.image_scale)))
-            #y += 1
-            animation_list.append(temp_img_list)
-        #print(animation_list)
-        return animation_list
-
-    #Method to move fighters
-    def move(self, screen_width, screen_height, surface, target, round_over):
-        SPEED = 10
-        GRAVITY = 2
-        FLOOR = 50
-        dx = 0
-        dy = 0
-        self.running = False
-        self.attack_type = 0
-
-        #Get keypress
-        key = pygame.key.get_pressed() #Register key pressed into key variable
-
-        #Can only perform other actions if not currently attacking
-        if self.attacking == False and self.alive == True and round_over == False:
-            #Check player 1 controls
-            if self.player == 1:
-                #Movement keys
-                #Move left
-                if key[pygame.K_a]: 
-                    dx = -SPEED
-                    self.running = True
-                #Move right
-                if key[pygame.K_d]:
-                    dx = SPEED
-                    self.running = True
-                #Jump
-                if key[pygame.K_w] and self.jump == False: #If not currently jumping
-                    self.vel_y = -30
-                    self.jump = True
-                #Attack
-                if key[pygame.K_r] or key[pygame.K_t]:
-                    self.attack(target)
-                    #Determine which attack type was used
-                    if key[pygame.K_r]:
-                        self.attack_type = 1
-                    if key[pygame.K_t]:
-                        self.attack_type = 2
-
-            #Check player 2 controls
-            if self.player == 2:
-                #Movement keys
-                #Move left
-                if key[pygame.K_LEFT]: 
-                    dx = -SPEED
-                    self.running = True
-                #Move right
-                if key[pygame.K_RIGHT]:
-                    dx = SPEED
-                    self.running = True
-                #Jump
-                if key[pygame.K_UP] and self.jump == False: #If not currently jumping
-                    self.vel_y = -30
-                    self.jump = True
-                #Attack
-                if key[pygame.K_KP1] or key[pygame.K_KP2]:
-                    self.attack(target)
-                    #Determine which attack type was used
-                    if key[pygame.K_KP1]:
-                        self.attack_type = 1
-                    if key[pygame.K_KP2]:
-                        self.attack_type = 2
-
-        #Apply gravity
-        self.vel_y += GRAVITY
-        dy += self.vel_y
-
-        #Ensure players stays on screen
-        if self.rect.left + dx < 0: #If player is going off left side of screen (x position is negative)
-            dx = 0 - self.rect.left
-
-        if self.rect.right + dx > screen_width: #If player is going off right side of screen
-            dx = screen_width - self.rect.right
-
-        if self.rect.bottom + dy > screen_height - FLOOR: 
-            self.vel_y = 0
-            self.jump = False #Reset player status to not jumping
-            dy = screen_height - FLOOR - self.rect.bottom
+        self.facing_right = True
+        self.attacking = False
+        self.blocking = False
+        self.power_attacking = False
+        self.dashing = False
+        self.attack_frame = 0
+        self.animation_frame = 0
+        self.frame_counter = 0
+        self.is_player_one = is_player_one
+        self.state = "idle"
+        self.dash_speed = 5
+        self.dash_duration = 10
+        self.dash_frame = 0
+        self.power_attack_frame = 0
         
-        #Ensure players face each other
-        if target.rect.centerx > self.rect.centerx:
-            self.flip = False
+    def jump(self):
+        if not self.is_jumping:
+            self.is_jumping = True
+            self.vy = -8
+
+    def attack(self):
+        if not self.attacking and not self.blocking:
+            self.attacking = True
+            self.attack_frame = 0
+
+    def power_attack(self):
+        if not self.power_attacking and not self.blocking:
+            self.power_attacking = True
+            self.power_attack_frame = 0
+
+    def block(self):
+        if not self.attacking and not self.power_attacking:
+            self.blocking = True
+
+    def stop_block(self):
+        self.blocking = False
+
+    def dash(self):
+        if not self.dashing:
+            self.dashing = True
+            self.dash_frame = 0
+        
+    def update(self):
+        self.frame_counter = (self.frame_counter + 1) % 8
+        if self.frame_counter == 0:
+            self.animation_frame = (self.animation_frame + 1) % 4
+
+        if self.is_jumping:
+            self.y += self.vy
+            self.vy += 0.5
+            self.state = "jump"
+            if self.y > 80:
+                self.y = 80
+                self.is_jumping = False
+                self.vy = 0
+                self.state = "idle"
+                
+        if self.attacking:
+            self.state = "attack"
+            self.attack_frame += 1
+            if self.attack_frame >= 10:
+                self.attacking = False
+                self.attack_frame = 0
+                self.state = "idle"
+
+        if self.power_attacking:
+            self.state = "power_attack"
+            self.power_attack_frame += 1
+            if self.power_attack_frame >= 15:
+                self.power_attacking = False
+                self.power_attack_frame = 0
+                self.state = "idle"
+
+        if self.dashing:
+            self.state = "dash"
+            self.dash_frame += 1
+            movement = self.dash_speed * (1 if self.facing_right else -1)
+            self.x += movement
+            if self.dash_frame >= self.dash_duration:
+                self.dashing = False
+                self.dash_frame = 0
+                self.state = "idle"
+
+    def draw(self):
+        flip = 1 if self.facing_right else -1
+        base_x = self.x if self.facing_right else self.x + 16
+        
+        # Draw shadow
+        pyxel.rect(self.x + 2, 86, 12, 2, 5)
+        
+        if self.blocking:
+            self._draw_block(base_x, flip)
+        elif self.power_attacking:
+            self._draw_power_attack(base_x, flip)
+        elif self.state == "idle":
+            self._draw_idle(base_x, flip)
+        elif self.state == "walk":
+            self._draw_walk(base_x, flip)
+        elif self.state == "jump":
+            self._draw_jump(base_x, flip)
+        elif self.state == "attack":
+            self._draw_attack(base_x, flip)
+        elif self.state == "dash":
+            self._draw_dash(base_x, flip)
+
+    def _draw_block(self, base_x, flip):
+        # Similar to idle but with arms raised in blocking position
+        pyxel.rect(base_x - 6 * flip, self.y - 24, 12, 12, 7)
+        pyxel.pset(base_x - 3 * flip, self.y - 18, 0)
+        pyxel.rect(base_x - 6 * flip, self.y - 12, 12, 18, self.color)
+        # Arms raised for blocking
+        pyxel.rect(base_x - 9 * flip, self.y - 20, 3, 12, 7)
+        pyxel.rect(base_x + 6 * flip, self.y - 20, 3, 12, 7)
+        pyxel.rect(base_x - 6 * flip, self.y + 6, 4, 8, 7)
+        pyxel.rect(base_x * flip, self.y + 6, 4, 8, 7)
+
+    def _draw_power_attack(self, base_x, flip):
+        self._draw_idle(base_x, flip)
+        # Extended attacking arm with effect
+        pyxel.rect(base_x + (3 if self.facing_right else -15), self.y - 8, 15, 4, 7)
+        if self.power_attack_frame < 8:
+            effect_x = base_x + (21 if self.facing_right else -33)
+            pyxel.circ(effect_x, self.y - 8, 8 - self.power_attack_frame, 10)
+            pyxel.circ(effect_x, self.y - 8, 6 - self.power_attack_frame, 8)
+
+    def _draw_dash(self, base_x, flip):
+        # Draw character leaning forward while dashing
+        pyxel.rect(base_x - 6 * flip, self.y - 24, 12, 12, 7)
+        pyxel.pset(base_x - 3 * flip, self.y - 18, 0)
+        # Leaning body
+        pyxel.rect(base_x - 8 * flip, self.y - 12, 14, 18, self.color)
+        # Trailing effect
+        for i in range(3):
+            offset = (i + 1) * 4 * (-1 if self.facing_right else 1)
+            pyxel.rect(base_x - 6 * flip + offset, self.y - 12, 12, 18, self.color - i - 1)
+
+    # Keep existing _draw_idle, _draw_walk, _draw_jump, and _draw_attack methods...
+    def _draw_idle(self, base_x, flip):
+        pyxel.rect(base_x - 6 * flip, self.y - 24, 12, 12, 7)
+        pyxel.pset(base_x - 3 * flip, self.y - 18, 0)
+        pyxel.rect(base_x - 6 * flip, self.y - 12, 12, 18, self.color)
+        arm_offset = 1 if self.animation_frame % 2 == 0 else 0
+        pyxel.rect(base_x - 9 * flip, self.y - 12 + arm_offset, 3, 12, 7)
+        leg_offset = 1 if self.animation_frame % 2 == 0 else 0
+        pyxel.rect(base_x - 6 * flip, self.y + 6, 4, 8, 7)
+        pyxel.rect(base_x * flip, self.y + 6 + leg_offset, 4, 8, 7)
+
+    def _draw_walk(self, base_x, flip):
+        self._draw_idle(base_x, flip)
+        leg_offset = abs(2 - self.animation_frame) * 2
+        pyxel.rect(base_x - 6 * flip, self.y + 6, 4, 8, 7)
+        pyxel.rect(base_x * flip, self.y + 6 + leg_offset, 4, 8, 7)
+
+    def _draw_jump(self, base_x, flip):
+        self._draw_idle(base_x, flip)
+        pyxel.rect(base_x - 6 * flip, self.y + 6, 4, 6, 7)
+        pyxel.rect(base_x * flip, self.y + 6, 4, 6, 7)
+
+    def _draw_attack(self, base_x, flip):
+        self._draw_idle(base_x, flip)
+        pyxel.rect(base_x + (3 if self.facing_right else -15), self.y - 8, 12, 3, 7)
+        if self.attack_frame < 5:
+            effect_x = base_x + (18 if self.facing_right else -30)
+            pyxel.circ(effect_x, self.y - 8, 6 - self.attack_frame, 8 + self.attack_frame)
+
+class TestGame:
+    def __init__(self):
+        self.player = Player(40, 150, 11)
+        self.opponent = Player(120, 150, 8, False)
+        self.ai = AIOpponent(self.player)
+        self.game_state = GameState()
+        self.background_color = 1
+        self.floor_color = 3
+        self.init_particles()
+        self.gesture_detector = GestureDetector()
+
+    def init_particles(self):
+        self.particles = []
+
+    def add_hit_particles(self, x, y, power=1):
+        num_particles = 5 * power
+        for _ in range(num_particles):
+            angle = random.uniform(0, 6.28)
+            speed = random.uniform(1, 3) * power
+            self.particles.append({
+                'x': x,
+                'y': y,
+                'dx': np.cos(angle) * speed,
+                'dy': np.sin(angle) * speed,
+                'life': 10 * power
+            })
+
+    def update_particles(self):
+        for particle in self.particles[:]:
+            particle['x'] += particle['dx']
+            particle['y'] += particle['dy']
+            particle['dy'] += 0.2
+            particle['life'] -= 1
+            if particle['life'] <= 0:
+                self.particles.remove(particle)
+
+    def update(self):
+        # Check for gesture-based actions
+        gesture = self.gesture_detector.get_gesture()
+        if gesture:
+            if gesture == "punch":
+                self.player.attack()
+            elif gesture == "block":
+                self.player.block()
+            elif gesture == "power_attack":
+                self.player.power_attack()
+            elif gesture == "dash":
+                self.player.dash()
+
+        # Regular controls (as fallback)
+        if pyxel.btn(pyxel.KEY_LEFT) or pyxel.btn(pyxel.KEY_RIGHT):
+            if not self.player.blocking and not self.player.dashing:
+                self.player.state = "walk"
         else:
-            self.flip = True
+            if not self.player.blocking and not self.player.dashing:
+                self.player.state = "idle"
+
+        if pyxel.btn(pyxel.KEY_SPACE):
+            self.player.jump()
+        if pyxel.btn(pyxel.KEY_LEFT):
+            if not self.player.blocking and not self.player.dashing:
+                self.player.x -= 2
+                self.player.facing_right = False
+        if pyxel.btn(pyxel.KEY_RIGHT):
+            if not self.player.blocking and not self.player.dashing:
+                self.player.x += 2
+                self.player.facing_right = True
+        if pyxel.btnp(pyxel.KEY_X):  # Keyboard attack as fallback
+            self.player.attack()
+        if pyxel.btnp(pyxel.KEY_C):  # Keyboard block as fallback
+            self.player.block()
+        if not pyxel.btn(pyxel.KEY_C) and self.player.blocking:
+            self.player.stop_block()
+
+        self.ai.update(self.opponent)
+        self.player.update()
+        self.opponent.update()
         
-        #Apply attack cooldown
+        # Combat collision detection
+        if abs(self.player.x - self.opponent.x) < 20:
+            if self.player.attacking:
+                if not self.opponent.blocking:
+                    self.opponent.health -= 10
+                    self.add_hit_particles(self.opponent.x, self.opponent.y - 8)
+                else:
+                    # Reduced damage when blocking
+                    self.opponent.health -= 3
+                    self.add_hit_particles(self.opponent.x, self.opponent.y - 8, 0.5)
+                    
+            if self.player.power_attacking:
+                if not self.opponent.blocking:
+                    self.opponent.health -= 20
+                    self.add_hit_particles(self.opponent.x, self.opponent.y - 8, 2)
+                else:
+                    # Still significant damage when blocking power attack
+                    self.opponent.health -= 10
+                    self.add_hit_particles(self.opponent.x, self.opponent.y - 8, 1)
+                    
+            if self.opponent.attacking:
+                if not self.player.blocking:
+                    self.player.health -= 10
+                    self.add_hit_particles(self.player.x, self.player.y - 8)
+                else:
+                    # Reduced damage when blocking
+                    self.player.health -= 3
+                    self.add_hit_particles(self.player.x, self.player.y - 8, 0.5)
+
+        self.update_particles()
+        
+        # Game over condition
+        if self.game_state.current_state == GameState.PLAYING:
+            if self.player.health <= 0 or self.opponent.health <= 0:
+                self.game_state.current_state = GameState.GAME_OVER
+                self.game_state.winner = "AI Opponent" if self.player.health <= 0 else "You"
+                self.game_state.final_score = (self.player.health, self.opponent.health)
+
+    def draw(self):
+        pyxel.cls(self.background_color)
+        
+        # Draw floor with details
+        pyxel.rect(0, 88, 160, 120, self.floor_color)
+        for i in range(0, 160, 20):
+            pyxel.rect(i, 88, 2, 2, self.floor_color + 1)
+
+        # Draw players
+        self.player.draw()
+        self.opponent.draw()
+        
+        # Draw particles
+        for particle in self.particles:
+            pyxel.pset(int(particle['x']), int(particle['y']), 
+                      10 if particle['life'] > 5 else 9)
+        
+        # Draw health bars with fancy border
+        def draw_health_bar(x, y, health, color):
+            pyxel.rect(x-1, y-1, 52, 7, 1)  # Border
+            pyxel.rect(x, y, 50, 5, 0)      # Background
+            pyxel.rect(x, y, health // 2, 5, color)  # Health
+
+        draw_health_bar(10, 10, self.player.health, 11)
+        draw_health_bar(90, 10, self.opponent.health, 8)
+        
+        # Draw controls
+        pyxel.text(5, 110, "SPACE:Jump X/Punch:Attack C:Block", 7)
+        
+        # Draw game over screen
+        if self.game_state.current_state == GameState.GAME_OVER:
+            pyxel.rectb(30, 40, 100, 40, 7)  # Border
+            pyxel.rect(31, 41, 98, 38, 0)    # Background
+            pyxel.text(45, 50, f"{self.game_state.winner} Won!", 7)
+            pyxel.text(45, 60, f"Final Score: {self.game_state.final_score[0]}-{self.game_state.final_score[1]}", 7)
+            pyxel.text(45, 70, "Press Q to quit", 7)
+
+    def cleanup(self):
+        if hasattr(self, 'gesture_detector'):
+            self.gesture_detector.cleanup()
+
+class NetworkUI:
+    def __init__(self):
+        self.state = "MENU"
+        self.selected_option = 0
+        self.menu_options = ["Test Game", "Host Game", "Join Game", "Quit"]
+        self.ip_address = ""
+        self.available_interfaces = self._get_network_interfaces()
+
+    def _get_network_interfaces(self):
+        interfaces = []
+        try:
+            for interface in netifaces.interfaces():
+                try:
+                    addrs = netifaces.ifaddresses(interface)
+                    if netifaces.AF_INET in addrs:
+                        for addr in addrs[netifaces.AF_INET]:
+                            if 'addr' in addr:
+                                interfaces.append((interface, addr['addr']))
+                except Exception:
+                    continue
+        except Exception:
+            interfaces.append(('localhost', '127.0.0.1'))
+        return interfaces
+
+    def update(self):
+        if self.state == "MENU":
+            if pyxel.btnp(pyxel.KEY_UP):
+                self.selected_option = (self.selected_option - 1) % len(self.menu_options)
+            if pyxel.btnp(pyxel.KEY_DOWN):
+                self.selected_option = (self.selected_option + 1) % len(self.menu_options)
+            
+            if pyxel.btnp(pyxel.KEY_RETURN):
+                if self.selected_option == 0:
+                    return "TEST"
+                elif self.selected_option == 1:
+                    self.state = "HOST_SETUP"
+                elif self.selected_option == 2:
+                    self.state = "JOIN_SETUP"
+                elif self.selected_option == 3:
+                    return "QUIT"
+
+        elif self.state == "HOST_SETUP":
+            if pyxel.btnp(pyxel.KEY_ESCAPE):
+                self.state = "MENU"
+            return None
+
+        elif self.state == "JOIN_SETUP":
+            if pyxel.btnp(pyxel.KEY_ESCAPE):
+                self.state = "MENU"
+            return None
+
+        return None
+
+    def draw(self):
+        pyxel.cls(0)
+        
+        if self.state == "MENU":
+            pyxel.text(60, 20, "GESTURE COMBAT", pyxel.COLOR_WHITE)
+            
+            for i, option in enumerate(self.menu_options):
+                color = pyxel.COLOR_YELLOW if i == self.selected_option else pyxel.COLOR_WHITE
+                pyxel.text(60, 40 + i * 10, option, color)
+
+        elif self.state == "HOST_SETUP":
+            pyxel.text(40, 20, "HOST GAME", pyxel.COLOR_WHITE)
+            pyxel.text(40, 40, "Available interfaces:", pyxel.COLOR_WHITE)
+            
+            for i, (interface, ip) in enumerate(self.available_interfaces):
+                pyxel.text(40, 60 + i * 10, f"{interface}: {ip}", pyxel.COLOR_WHITE)
+            
+            pyxel.text(40, 100, "Press ESC to return", pyxel.COLOR_WHITE)
+
+        elif self.state == "JOIN_SETUP":
+            pyxel.text(40, 20, "JOIN GAME", pyxel.COLOR_WHITE)
+            pyxel.text(40, 40, "Enter IP address:", pyxel.COLOR_WHITE)
+            pyxel.text(40, 60, self.ip_address + "_", pyxel.COLOR_WHITE)
+            pyxel.text(40, 100, "Press ESC to return", pyxel.COLOR_WHITE)
+
+class GameState:
+    MENU = "MENU"
+    PLAYING = "PLAYING"
+    GAME_OVER = "GAME_OVER"
+    
+    def __init__(self):
+        self.current_state = self.PLAYING
+        self.winner = None
+        self.final_score = (0, 0)
+
+class AIOpponent:
+    def __init__(self, player):
+        self.player = player
+        self.attack_cooldown = 0
+        self.decision_cooldown = 0
+        self.current_action = None
+        
+    def update(self, opponent):
+        if self.decision_cooldown > 0:
+            self.decision_cooldown -= 1
+        else:
+            self.decision_cooldown = 30
+            self.decide_action(opponent)
+            
         if self.attack_cooldown > 0:
             self.attack_cooldown -= 1
-
-        #Update player position
-        self.rect.x += dx
-        self.rect.y += dy
-
-    #Handle animation updates
-    def update(self):
-        #Check what action the player is performing
-        if self.health <= 0:
-            self.health = 0
-            self.alive = False
-            self.update_action(6) #6:death
-        elif self.hit == True:
-            self.update_action(5) #5:hit
-        elif self.attacking == True: 
-            if self.attack_type == 1:
-                self.update_action(3) #3:attack1
-            elif self.attack_type == 2:
-                self.update_action(4) #4:attack2
-        elif self.jump == True:
-            self.update_action(2) #2:jump
-        elif self.running == True:
-            self.update_action(1) #1:run
-        else:
-            self.update_action(0) #0:idle     
-
-        animation_cooldown = 45
-
-        #Update image
-        self.image = self.animation_list[self.action][self.frame_index]
-
-        #Check if enough time has passed since last update
-        if pygame.time.get_ticks() - self.update_time > animation_cooldown:
-            self.frame_index += 1
-            self.update_time = pygame.time.get_ticks()
-
-        #Check if animation has finished
-        if self.frame_index >= len(self.animation_list[self.action]): #If next animation index is out of range
-
-            #If player is dead, end animation
-            if self.alive == False:
-                self.frame_index = len(self.animation_list[self.action]) - 1
-            else:
-                self.frame_index = 0
-
-                #Check if an attack was performed
-                if self.action == 3 or self.action == 4:
-                    self.attacking = False
-                    self.attack_cooldown = 20
-
-                #Check if damage was taken
-                if self.action == 5:
-                    self.hit = False
-                    #If the player was in the middle of an attack, stop attack animation
-                    self.attacking = False
-                    self.attack_cooldown = 20
-
-    #Method to attack
-    def attack(self, target):
-        #Add a delay before allowing another attack
-        ATTACK_DELAY = 300
-
-        if self.attack_cooldown == 0 and pygame.time.get_ticks() - self.last_attack_time > ATTACK_DELAY:
-            self.attacking = True
-            self.attack_sound.play()
             
-            #Create attack hitbox facing target, from center of player
-            attack_width = 3 * self.rect.width
-            attack_height = self.rect.height
-            if self.flip:
-                attacking_rect = pygame.Rect(self.rect.left - attack_width, self.rect.y, attack_width, attack_height)
-            else:
-                attacking_rect = pygame.Rect(self.rect.right, self.rect.y, attack_width, attack_height)
-            
-            #Check for collision with target
-            if attacking_rect.colliderect(target.rect):
-                target.health -= 34
-                target.hit = True
-                self.hit_sound.play()
-
-            #Set the attack cooldown
-            self.attack_cooldown = 20
-            self.last_attack_time = pygame.time.get_ticks()
-            #pygame.draw.rect(surface, (0, 255, 0), attacking_rect)
-
-
-
-    def update_action(self, new_action):
-        #Check if the new action is different to previous one
-        if new_action != self.action:
-            self.action = new_action
-
-            #Update animation settings
-            self.frame_index = 0
-            self.update_time = pygame.time.get_ticks()
-
-    #Method to draw fighters    
-    def draw(self, surface):
-        img = pygame.transform.flip(self.image, self.flip, False)
-        #pygame.draw.rect(surface, (255, 0, 0), self.rect)
-
-        # Check the current action and apply the appropriate offset
-        if self.action == 5:  # Hit animation
-            surface.blit(img, (self.rect.x - (self.hit_offset[0] * self.image_scale), self.rect.y - (self.hit_offset[1] * self.image_scale)))
-        elif self.action == 6:  # Death animation
-            surface.blit(img, (self.rect.x - (self.death_offset[0] * self.image_scale), self.rect.y - (self.death_offset[1] * self.image_scale)))
-        elif self.action not in [0, 1, 2]:  # Custom offset for animations other than idle, run, and jump
-            surface.blit(img, (self.rect.x - (self.custom_offset[0] * self.image_scale), self.rect.y - (self.custom_offset[1] * self.image_scale)))
+        self.execute_action(opponent)
+    
+    def decide_action(self, opponent):
+        distance = abs(self.player.x - opponent.x)
+        
+        if distance > 40:
+            self.current_action = "approach"
+        elif distance < 20:
+            self.current_action = "retreat"
+        elif self.attack_cooldown == 0:
+            self.current_action = "attack"
         else:
-            # Apply regular offset for idle, run, and jump actions
-            surface.blit(img, (self.rect.x - (self.offset[0] * self.image_scale), self.rect.y - (self.offset[1] * self.image_scale)))
+            self.current_action = "idle"
+    
+    def execute_action(self, opponent):
+        if self.current_action == "approach":
+            if opponent.x < self.player.x:
+                opponent.x += 1
+                opponent.facing_right = False
+            else:
+                opponent.x -= 1
+                opponent.facing_right = True
+            opponent.state = "walk"
+            
+        elif self.current_action == "retreat":
+            if opponent.x < self.player.x:
+                opponent.x -= 1
+                opponent.facing_right = True
+            else:
+                opponent.x += 1
+                opponent.facing_right = False
+            opponent.state = "walk"
+            
+        elif self.current_action == "attack" and self.attack_cooldown == 0:
+            opponent.attack()
+            self.attack_cooldown = 60
+            
+        else:
+            opponent.state = "idle"
 
+def main():
+    pyxel.init(160, 120, title="Gesture Combat")
+    
+    net_ui = NetworkUI()
+    current_game = None
+    
+    try:
+        while True:
+            if current_game is None:
+                result = net_ui.update()
+                net_ui.draw()
+                
+                if result == "TEST":
+                    current_game = TestGame()
+                elif result == "HOST":
+                    pass
+                elif result == "QUIT":
+                    break
+                elif isinstance(result, tuple) and result[0] == "JOIN":
+                    pass
+            else:
+                current_game.update()
+                current_game.draw()
+                
+                if pyxel.btnp(pyxel.KEY_Q):
+                    if isinstance(current_game, TestGame):
+                        current_game.cleanup()
+                        break
+                    else:
+                        current_game = None
+                    
+            pyxel.flip()
+    finally:
+        if current_game and isinstance(current_game, TestGame):
+            current_game.cleanup()
 
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"Fatal error: {e}")
+        sys.exit(1)
 
-```
+'''
+
 ### Output:
-![WhatsApp Image 2024-11-12 at 13 20 14_35cffa6c](https://github.com/user-attachments/assets/9d7e90bf-99be-4d1b-8147-ac8751b8dda4)
-![WhatsApp Image 2024-11-12 at 13 20 15_64010c38](https://github.com/user-attachments/assets/d4b75f05-96d0-4f55-a592-8cf93c8392dc)
-![WhatsApp Image 2024-11-12 at 13 21 21_e08494d7](https://github.com/user-attachments/assets/9f6e097c-2b4e-4d73-8d90-3aed6fe5e186)
+![WhatsApp Image 2024-11-17 at 09 52 50_957a4df4](https://github.com/user-attachments/assets/8619b3e4-fdbb-4d37-87ce-0ef23f567cff)
+![WhatsApp Image 2024-11-17 at 09 53 53_47416230](https://github.com/user-attachments/assets/144fe182-fc84-4dc7-a86f-fe95a412be58)
+![WhatsApp Image 2024-11-17 at 09 55 12_75d7e201](https://github.com/user-attachments/assets/8e4d4c29-7554-4203-86ec-284cc9f2570f)
+![WhatsApp Image 2024-11-17 at 09 55 39_61ce7c68](https://github.com/user-attachments/assets/8e6874a4-624a-4b13-a22f-f5fd0fd85fea)
 
 
 
 ### Result:
-
-The 2D fighting game was successfully developed using Python and Pygame. The game allows the player character to engage AI-controlled enemies with animated actions, health bars, scoring, and respawn mechanics. The game ends with a "Game Over" screen displaying the final score, providing an interactive and visually appealing gameplay experience.
+The 2D fighting game was successfully implemented, featuring gesture-based controls and AI-driven opponents. Players can interact with AI enemies through dynamic animations, health tracking, and scoring mechanisms. The game concludes with a "Game Over" screen showcasing the final score, delivering an engaging and polished gameplay experience.
