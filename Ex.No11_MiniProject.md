@@ -18,6 +18,7 @@ Collision and Cooldowns: Manage attack cooldowns and detect player-AI or project
 
   
 ### Program:
+
 ```
 import pyxel
 import socket
@@ -660,8 +661,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Fatal error: {e}")
         sys.exit(1)
-
-'''
+```
 
 ### Output:
 ![WhatsApp Image 2024-11-17 at 09 52 50_957a4df4](https://github.com/user-attachments/assets/8619b3e4-fdbb-4d37-87ce-0ef23f567cff)
